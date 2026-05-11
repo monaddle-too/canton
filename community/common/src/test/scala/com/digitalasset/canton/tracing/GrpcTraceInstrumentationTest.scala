@@ -10,6 +10,7 @@ import com.digitalasset.canton.protobuf.HelloServiceGrpc.HelloService
 import com.digitalasset.canton.tracing.TestTelemetry.eventsOrderedByTime
 import com.digitalasset.canton.{BaseTest, HasExecutionContext}
 import io.grpc.stub.StreamObserver
+import io.opentelemetry.api.common.AttributeKey.stringKey
 import io.opentelemetry.context.Context
 import org.scalatest.Outcome
 import org.scalatest.concurrent.Eventually
@@ -248,7 +249,7 @@ class GrpcTraceInstrumentationTest
       }
     }
 
-    "attach only whitelisted protocol identifiers from message fields" in { _ =>
+    "attach only whitelisted protocol identifiers from message fields" in { env =>
       final case class IdentifiedMessage(
           participantId: String,
           synchronizerId: String,
@@ -272,6 +273,23 @@ class GrpcTraceInstrumentationTest
       attributes should contain("canton.protocol.submission_id" -> "submission-id")
       message.payload shouldBe "payload-must-not-be-captured"
       attributes.keys should not contain "payload"
+
+      val spanEventAttributes = GrpcTraceInstrumentation.attributesForMessage(
+        env.grpc.helloServiceDefinition.getMethods.iterator().next().getMethodDescriptor,
+        GrpcTraceInstrumentation.CallAttributes(direction = "server"),
+        "received",
+        1L,
+        message,
+      )
+      spanEventAttributes.get(
+        stringKey("canton.protocol.participant_id")
+      ) shouldBe "participant::id"
+      spanEventAttributes.get(
+        stringKey("canton.protocol.synchronizer_id")
+      ) shouldBe "synchronizer::id"
+      spanEventAttributes.get(stringKey("canton.protocol.request_id")) shouldBe "7"
+      spanEventAttributes.get(stringKey("canton.protocol.submission_id")) shouldBe "submission-id"
+      Option(spanEventAttributes.get(stringKey("payload"))) shouldBe empty
     }
   }
 }

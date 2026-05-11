@@ -67,7 +67,9 @@ private[tracing] object GrpcTraceInstrumentation {
   )
 
   private val IdentifierKeys: Map[String, AttributeKey[String]] =
-    IdentifierAttributeNames.view.mapValues(stringKey).toMap
+    IdentifierAttributeNames.valuesIterator.map(attributeName =>
+      attributeName -> stringKey(attributeName)
+    ).toMap
 
   final case class CallAttributes(
       direction: String,
