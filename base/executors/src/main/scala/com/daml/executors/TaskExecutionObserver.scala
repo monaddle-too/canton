@@ -29,6 +29,22 @@ object TaskExecutionObserver {
     case object SubmitCallable extends TaskKind {
       override val name: String = "submit-callable"
     }
+
+    case object ScheduleRunnable extends TaskKind {
+      override val name: String = "schedule-runnable"
+    }
+
+    case object ScheduleCallable extends TaskKind {
+      override val name: String = "schedule-callable"
+    }
+
+    case object ScheduleAtFixedRateRunnable extends TaskKind {
+      override val name: String = "schedule-at-fixed-rate-runnable"
+    }
+
+    case object ScheduleWithFixedDelayRunnable extends TaskKind {
+      override val name: String = "schedule-with-fixed-delay-runnable"
+    }
   }
 
   final case class TaskSubmitted(

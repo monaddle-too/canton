@@ -5,6 +5,7 @@ package com.digitalasset.canton.concurrent
 
 import cats.syntax.either.*
 import com.daml.executors.TaskExecutionObserver
+import com.daml.executors.executors.ObservedScheduledExecutorService
 import com.daml.metrics.ExecutorServiceMetrics
 import com.digitalasset.canton.checked
 import com.digitalasset.canton.config.RequireTypes.PositiveInt
@@ -71,6 +72,7 @@ object Threading {
   def singleThreadScheduledExecutor(
       name: String,
       logger: Logger,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   ): ScheduledExecutorService = {
     val executor = new ScheduledThreadPoolExecutor(
       1,
@@ -78,7 +80,8 @@ object Threading {
     )
     // we don't want tasks scheduled far in the future to prevent a clean shutdown
     executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false)
-    executor
+    if (taskObserver eq TaskExecutionObserver.NoOp) executor
+    else new ObservedScheduledExecutorService(executor, name, taskObserver)
   }
 
   /** Creates a singled threaded scheduled executor with maximum thread pool size = 1.

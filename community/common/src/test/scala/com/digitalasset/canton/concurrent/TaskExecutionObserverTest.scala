@@ -57,6 +57,35 @@ class TaskExecutionObserverTest extends BaseTestWordSpec {
     }
   }
 
+  "singleThreadScheduledExecutor task observation" should {
+    "record queue, run, and worker-thread data for scheduled runnables" in {
+      val observer = new RecordingTaskObserver
+      val executor = Threading.singleThreadScheduledExecutor(
+        "observed-scheduler",
+        noTracingLogger,
+        observer,
+      )
+      val ran = new CountDownLatch(1)
+
+      try {
+        executor.schedule((() => ran.countDown()): Runnable, 1L, TimeUnit.MILLISECONDS)
+
+        ran.await(5, TimeUnit.SECONDS) shouldBe true
+        val completed = observer.nextCompleted()
+
+        completed.started.submitted.executorName shouldBe "observed-scheduler"
+        completed.started.submitted.taskKind shouldBe TaskKind.ScheduleRunnable
+        completed.started.queueTimeNanos should be >= 0L
+        completed.runTimeNanos should be >= 0L
+        completed.started.workerThreadName should startWith("observed-scheduler-")
+        completed.started.workerThreadId should not be Thread.currentThread().getId
+        completed.failure shouldBe None
+      } finally {
+        val _ = executor.shutdownNow()
+      }
+    }
+  }
+
   private def observedExecutor(
       observer: TaskExecutionObserver
   ): NamedExecutionContextExecutorService = {

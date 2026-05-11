@@ -10,7 +10,6 @@ import io.opentelemetry.api.common.{Attributes, AttributesBuilder}
 import io.opentelemetry.api.trace.{Span, SpanKind, Tracer}
 
 import java.net.InetSocketAddress
-import scala.collection.mutable
 
 private[tracing] object GrpcTraceInstrumentation {
 
@@ -43,33 +42,6 @@ private[tracing] object GrpcTraceInstrumentation {
   val GrpcPeerKey: AttributeKey[String] = stringKey("canton.grpc.peer")
   val ThreadIdKey: AttributeKey[java.lang.Long] = longKey("thread.id")
   val ThreadNameKey: AttributeKey[String] = stringKey("thread.name")
-
-  private val MaxIdentifierLength = 256
-
-  private val IdentifierAttributeNames: Map[String, String] = Map(
-    "participantId" -> "canton.protocol.participant_id",
-    "participantUid" -> "canton.protocol.participant_uid",
-    "synchronizerId" -> "canton.protocol.synchronizer_id",
-    "physicalSynchronizerId" -> "canton.protocol.physical_synchronizer_id",
-    "synchronizerAlias" -> "canton.protocol.synchronizer_alias",
-    "sequencerId" -> "canton.protocol.sequencer_id",
-    "mediatorId" -> "canton.protocol.mediator_id",
-    "member" -> "canton.protocol.member",
-    "memberId" -> "canton.protocol.member_id",
-    "requestId" -> "canton.protocol.request_id",
-    "submissionId" -> "canton.protocol.submission_id",
-    "commandId" -> "canton.protocol.command_id",
-    "workflowId" -> "canton.protocol.workflow_id",
-    "topologyTransactionId" -> "canton.protocol.topology_transaction_id",
-    "topologyMappingId" -> "canton.protocol.topology_mapping_id",
-    "transactionId" -> "canton.protocol.transaction_id",
-    "updateId" -> "canton.protocol.update_id",
-  )
-
-  private val IdentifierKeys: Map[String, AttributeKey[String]] =
-    IdentifierAttributeNames.valuesIterator.map(attributeName =>
-      attributeName -> stringKey(attributeName)
-    ).toMap
 
   final case class CallAttributes(
       direction: String,
@@ -189,46 +161,9 @@ private[tracing] object GrpcTraceInstrumentation {
     }
 
   private[tracing] def protocolIdentifierAttributes(message: Any): Map[String, String] = {
-    val result = mutable.Map.empty[String, String]
-    message match {
-      case product: Product =>
-        product.productElementNames.zip(product.productIterator).foreach {
-          case (name, value) =>
-            for {
-              attributeName <- IdentifierAttributeNames.get(name)
-              attributeValue <- safeIdentifierValue(value)
-            } result.put(attributeName, attributeValue)
-        }
-      case _ =>
-    }
-    result.toMap
+    ProtocolTraceInstrumentation.protocolIdentifierAttributes(message)
   }
 
   private def addProtocolIdentifierAttributes(builder: AttributesBuilder, message: Any): Unit =
-    protocolIdentifierAttributes(message).foreach { case (attributeName, attributeValue) =>
-      IdentifierKeys.get(attributeName).foreach(builder.put(_, attributeValue))
-    }
-
-  @SuppressWarnings(Array("org.wartremover.warts.Null"))
-  private def safeIdentifierValue(value: Any): Option[String] =
-    value match {
-      case null => None
-      case Some(inner) => safeIdentifierValue(inner)
-      case None => None
-      case string: String if string.nonEmpty => Some(limitIdentifier(string))
-      case value: java.lang.Long => Some(value.toString)
-      case value: java.lang.Integer => Some(value.toString)
-      case value: java.lang.Short => Some(value.toString)
-      case value: java.lang.Byte => Some(value.toString)
-      case value: java.lang.Boolean => Some(value.toString)
-      case value: Long => Some(value.toString)
-      case value: Int => Some(value.toString)
-      case value: Short => Some(value.toString)
-      case value: Byte => Some(value.toString)
-      case value: Boolean => Some(value.toString)
-      case _ => None
-    }
-
-  private def limitIdentifier(value: String): String =
-    if (value.length <= MaxIdentifierLength) value else value.take(MaxIdentifierLength)
+    ProtocolTraceInstrumentation.addProtocolIdentifierAttributes(builder, message)
 }

@@ -24,7 +24,14 @@ import com.digitalasset.canton.logging.{ErrorLoggingContext, LoggingContextWithT
 import com.digitalasset.canton.platform.apiserver.services.command.CommandServiceImplSpec.*
 import com.digitalasset.canton.platform.apiserver.services.tracking.SubmissionTracker
 import com.digitalasset.canton.platform.apiserver.services.{ApiCommandService, tracking}
-import com.digitalasset.canton.tracing.{TraceContext, Traced}
+import com.digitalasset.canton.tracing.{
+  ProtocolTraceInstrumentation,
+  TestTelemetry,
+  TestTelemetrySetup,
+  TraceContext,
+  TraceContextGrpc,
+  Traced,
+}
 import com.digitalasset.canton.util.Thereafter.syntax.*
 import com.digitalasset.canton.{BaseTest, HasExecutionContext, config}
 import com.digitalasset.daml.lf.data.Ref
@@ -220,6 +227,69 @@ class CommandServiceImplSpec
       verify(transactionSubmissionTracker).close()
       verify(reassignmentSubmissionTracker).close()
       succeed
+    }
+
+    "emit payload-safe protocol identifier span events for validated commands" in withTestContext {
+      testContext =>
+        import testContext.*
+
+        val telemetry = new TestTelemetrySetup()
+        TraceContextGrpc.configureGrpcMessageSpanEvents(enabled = true, serverTracer = None)
+        val rootSpan = telemetry.tracer.spanBuilder("command-service-root").startSpan()
+        val traceContext = TraceContext.withOpenTelemetryContext(
+          io.opentelemetry.context.Context.root().`with`(rootSpan)
+        )(identity)
+        val loggingContext = LoggingContextWithTrace(loggerFactory)(traceContext)
+        val service = new CommandServiceImpl(
+          UnimplementedTransactionServices,
+          transactionSubmissionTracker,
+          reassignmentSubmissionTracker,
+          submit,
+          submitReassignment,
+          config.NonNegativeFiniteDuration.ofSeconds(1337L),
+          loggerFactory,
+        )
+
+        service
+          .submitAndWait(
+            SubmitAndWaitRequest.of(
+              Some(
+                commands.copy(
+                  submissionId = submissionId,
+                  workflowId = "workflow-id",
+                  synchronizerId = "synchronizer-id",
+                )
+              )
+            )
+          )(loggingContext)
+          .map { _ =>
+            rootSpan.end()
+            val protocolEvent = TestTelemetry
+              .eventsOrderedByTime(telemetry.reportedSpans()*)
+              .find(_.getName == ProtocolTraceInstrumentation.IdentifierEventName)
+              .valueOrFail("protocol identifier event")
+
+            protocolEvent.getAttributes.get(
+              ProtocolTraceInstrumentation.BoundaryKey
+            ) shouldBe "ledger.command.submit_and_wait"
+            protocolEvent.getAttributes.get(
+              io.opentelemetry.api.common.AttributeKey.stringKey("canton.protocol.command_id")
+            ) shouldBe commandId
+            protocolEvent.getAttributes.get(
+              io.opentelemetry.api.common.AttributeKey.stringKey("canton.protocol.submission_id")
+            ) shouldBe submissionId
+            protocolEvent.getAttributes.get(
+              io.opentelemetry.api.common.AttributeKey.stringKey("canton.protocol.workflow_id")
+            ) shouldBe "workflow-id"
+            protocolEvent.getAttributes.get(
+              io.opentelemetry.api.common.AttributeKey.stringKey("canton.protocol.synchronizer_id")
+            ) shouldBe "synchronizer-id"
+          }
+          .thereafter { _ =>
+            service.close()
+            telemetry.close()
+            TraceContextGrpc.configureGrpcMessageSpanEvents(enabled = false, serverTracer = None)
+          }
     }
   }
 

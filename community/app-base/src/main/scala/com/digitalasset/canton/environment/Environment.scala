@@ -82,6 +82,10 @@ class Environment(
     Threading.singleThreadScheduledExecutor(
       loggerFactory.threadName + "-env-sched",
       noTracingLogger,
+      taskObserver =
+        if (initialConfig.monitoring.tracing.observability.executorTaskSpanEvents)
+          new TraceContextTaskObserver()
+        else TaskExecutionObserver.NoOp,
     )
 
   def config: CantonConfig = currentConfig.get()

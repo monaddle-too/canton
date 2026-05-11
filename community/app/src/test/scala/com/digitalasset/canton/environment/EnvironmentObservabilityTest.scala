@@ -64,5 +64,45 @@ class EnvironmentObservabilityTest
         environment.close()
       }
     }
+
+    "install scheduler task attribution when enabled by tracing config" in new TestEnvironment {
+      override def config: CantonConfig =
+        sampleConfig.copy(
+          monitoring = sampleConfig.monitoring.copy(
+            tracing = sampleConfig.monitoring.tracing.copy(
+              observability = sampleConfig.monitoring.tracing.observability.copy(
+                executorTaskSpanEvents = true
+              )
+            )
+          )
+        )
+
+      val telemetry = new TestTelemetrySetup()
+      try {
+        val rootSpan = telemetry.tracer.spanBuilder("environment-scheduler-root").startSpan()
+        val traceContext = TraceContext.withOpenTelemetryContext(Context.root().`with`(rootSpan))(
+          identity
+        )
+
+        TraceContextGrpc.withGrpcContext(traceContext) {
+          environment.scheduler
+            .schedule((() => ()): Runnable, 1L, TimeUnit.MILLISECONDS)
+            .get(5, TimeUnit.SECONDS)
+        }
+        rootSpan.end()
+
+        eventually(telemetry.reportedSpans() should have size 1)
+        val taskEvents = TestTelemetry
+          .eventsOrderedByTime(telemetry.reportedSpans()*)
+          .filter(_.getName == TraceContextTaskObserver.TaskEventName)
+        taskEvents should have size 1
+        taskEvents.head.getAttributes.get(
+          TraceContextTaskObserver.ExecutorNameKey
+        ) should include("-env-sched")
+      } finally {
+        telemetry.close()
+        environment.close()
+      }
+    }
   }
 }

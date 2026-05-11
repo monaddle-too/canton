@@ -250,11 +250,19 @@ class GrpcTraceInstrumentationTest
     }
 
     "attach only whitelisted protocol identifiers from message fields" in { env =>
+      final case class NestedCommands(
+          commandId: String,
+          submissionId: Option[String],
+          workflowId: String,
+          synchronizerId: String,
+          payload: String,
+      )
       final case class IdentifiedMessage(
           participantId: String,
           synchronizerId: String,
           requestId: Long,
           submissionId: Option[String],
+          commands: Option[NestedCommands],
           payload: String,
       )
 
@@ -263,6 +271,15 @@ class GrpcTraceInstrumentationTest
         synchronizerId = "synchronizer::id",
         requestId = 7L,
         submissionId = Some("submission-id"),
+        commands = Some(
+          NestedCommands(
+            commandId = "command-id",
+            submissionId = Some("nested-submission-id"),
+            workflowId = "workflow-id",
+            synchronizerId = "nested-synchronizer-id",
+            payload = "nested-payload-must-not-be-captured",
+          )
+        ),
         payload = "payload-must-not-be-captured",
       )
       val attributes = GrpcTraceInstrumentation.protocolIdentifierAttributes(message)
@@ -271,6 +288,8 @@ class GrpcTraceInstrumentationTest
       attributes should contain("canton.protocol.synchronizer_id" -> "synchronizer::id")
       attributes should contain("canton.protocol.request_id" -> "7")
       attributes should contain("canton.protocol.submission_id" -> "submission-id")
+      attributes should contain("canton.protocol.command_id" -> "command-id")
+      attributes should contain("canton.protocol.workflow_id" -> "workflow-id")
       message.payload shouldBe "payload-must-not-be-captured"
       attributes.keys should not contain "payload"
 
@@ -289,6 +308,8 @@ class GrpcTraceInstrumentationTest
       ) shouldBe "synchronizer::id"
       spanEventAttributes.get(stringKey("canton.protocol.request_id")) shouldBe "7"
       spanEventAttributes.get(stringKey("canton.protocol.submission_id")) shouldBe "submission-id"
+      spanEventAttributes.get(stringKey("canton.protocol.command_id")) shouldBe "command-id"
+      spanEventAttributes.get(stringKey("canton.protocol.workflow_id")) shouldBe "workflow-id"
       Option(spanEventAttributes.get(stringKey("payload"))) shouldBe empty
     }
   }

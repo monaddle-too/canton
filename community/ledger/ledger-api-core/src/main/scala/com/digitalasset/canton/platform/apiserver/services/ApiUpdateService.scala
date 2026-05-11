@@ -24,7 +24,7 @@ import com.digitalasset.canton.metrics.LedgerApiServerMetrics
 import com.digitalasset.canton.platform.config.UpdateServiceConfig
 import com.digitalasset.canton.platform.store.backend.common.UpdatePointwiseQueries.LookupKey
 import com.digitalasset.canton.protocol.UpdateId
-import com.digitalasset.canton.tracing.TraceContextGrpc
+import com.digitalasset.canton.tracing.{ProtocolTraceInstrumentation, TraceContextGrpc}
 import com.digitalasset.canton.util.Thereafter.syntax.*
 import com.digitalasset.daml.lf.data.Ref
 import io.grpc.stub.StreamObserver
@@ -153,6 +153,11 @@ final class ApiUpdateService(
               logging.updateId(request.updateId),
               logging.updateFormat(request.updateFormat),
             )(loggingContextWithTrace)
+          ProtocolTraceInstrumentation.emitIdentifierEvent(
+            "ledger.update.get_by_id",
+            "participantId" -> participantId,
+            "updateId" -> request.updateId.toHexString,
+          )(enrichedLoggingContext.traceContext)
           logger.info(
             s"Received request for update by ID, ${enrichedLoggingContext
                 .serializeFiltered("eventId", "updateFormat")}."

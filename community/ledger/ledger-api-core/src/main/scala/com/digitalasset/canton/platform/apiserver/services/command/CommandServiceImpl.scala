@@ -38,7 +38,7 @@ import com.digitalasset.canton.platform.apiserver.services.tracking.{
   SubmissionTracker,
 }
 import com.digitalasset.canton.platform.apiserver.services.{ApiCommandService, logging}
-import com.digitalasset.canton.tracing.{TraceContext, Traced}
+import com.digitalasset.canton.tracing.{ProtocolTraceInstrumentation, TraceContext, Traced}
 import io.grpc.{Context, Deadline, Status}
 
 import java.time.Instant
@@ -177,6 +177,13 @@ private[apiserver] final class CommandServiceImpl private[services] (
     for {
       _ <- ifServiceRunning
       commands = ensureCommandsPopulated
+      _ = ProtocolTraceInstrumentation.emitIdentifierEvent(
+        "ledger.command.submit_and_wait",
+        "commandId" -> commands.commandId,
+        "submissionId" -> commands.submissionId,
+        "workflowId" -> commands.workflowId,
+        "synchronizerId" -> commands.synchronizerId,
+      )
       nonNegativeTimeout <- Future.fromTry(
         validateRequestTimeout(
           deadlineO,
@@ -225,6 +232,12 @@ private[apiserver] final class CommandServiceImpl private[services] (
     for {
       _ <- ifServiceRunning
       commands = ensureCommandsPopulated
+      _ = ProtocolTraceInstrumentation.emitIdentifierEvent(
+        "ledger.command.submit_and_wait_reassignment",
+        "commandId" -> commands.commandId,
+        "submissionId" -> commands.submissionId,
+        "workflowId" -> commands.workflowId,
+      )
       nonNegativeTimeout <- Future.fromTry(
         validateRequestTimeout(
           deadlineO,
