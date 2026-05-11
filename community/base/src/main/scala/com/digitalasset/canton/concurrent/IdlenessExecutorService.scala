@@ -3,6 +3,7 @@
 
 package com.digitalasset.canton.concurrent
 
+import com.daml.executors.TaskExecutionObserver
 import com.daml.executors.executors.NamedExecutionContextExecutorService
 
 import java.util.concurrent.*
@@ -54,7 +55,8 @@ abstract class ExecutionContextIdlenessExecutorService(
     delegate: ExecutorService,
     name: String,
     reporter: Throwable => Unit,
-) extends NamedExecutionContextExecutorService(delegate, name, reporter)
+    taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
+) extends NamedExecutionContextExecutorService(delegate, name, reporter, taskObserver)
     with IdlenessExecutorService {
 
   def queueSize: Long
@@ -65,7 +67,8 @@ class ForkJoinIdlenessExecutorService(
     monitoredPool: ExecutorService,
     reporter: Throwable => Unit,
     name: String,
-) extends ExecutionContextIdlenessExecutorService(monitoredPool, name, reporter) {
+    taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
+) extends ExecutionContextIdlenessExecutorService(monitoredPool, name, reporter, taskObserver) {
 
   override protected[concurrent] def awaitIdlenessOnce(timeout: FiniteDuration): Boolean =
     pool.awaitQuiescence(timeout.toMillis, TimeUnit.MILLISECONDS)
@@ -80,7 +83,8 @@ class ThreadPoolIdlenessExecutorService(
     monitoredPool: ExecutorService,
     reporter: Throwable => Unit,
     name: String,
-) extends ExecutionContextIdlenessExecutorService(monitoredPool, name, reporter) {
+    taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
+) extends ExecutionContextIdlenessExecutorService(monitoredPool, name, reporter, taskObserver) {
 
   override protected[concurrent] def awaitIdlenessOnce(timeout: FiniteDuration): Boolean = {
     val deadline = timeout.fromNow

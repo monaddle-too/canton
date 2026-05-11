@@ -4,6 +4,7 @@
 package com.digitalasset.canton.concurrent
 
 import cats.syntax.either.*
+import com.daml.executors.TaskExecutionObserver
 import com.daml.metrics.ExecutorServiceMetrics
 import com.digitalasset.canton.checked
 import com.digitalasset.canton.config.RequireTypes.PositiveInt
@@ -92,6 +93,7 @@ object Threading {
       name: String,
       logger: Logger,
       executorServiceMetrics: ExecutorServiceMetrics,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   ): ExecutionContextIdlenessExecutorService = {
     val executor = new ThreadPoolExecutor(
       1,
@@ -109,6 +111,7 @@ object Threading {
       monitoredExecutor,
       ThrowableUtil.createReporter(name, logger, exitOnFatal = true)(_),
       name,
+      taskObserver,
     )
   }
 
@@ -169,6 +172,7 @@ object Threading {
       maxPoolSize: Option[PositiveInt] = None,
       minRunnable: Option[PositiveInt] = None,
       exitOnFatal: Boolean = true,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   ): ExecutionContextIdlenessExecutorService = {
     val uncaughtExceptionReporter =
       ThrowableUtil.createReporter(name, logger, exitOnFatal)(_)
@@ -198,6 +202,7 @@ object Threading {
       monitoredPool,
       uncaughtExceptionReporter,
       name,
+      taskObserver,
     )
   }
 

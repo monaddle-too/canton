@@ -14,12 +14,14 @@ object InstrumentedExecutors {
       name: String,
       parallelism: Int,
       errorReporter: Throwable => Unit = ExecutionContext.defaultReporter,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   ): NamedExecutionContextExecutorService = {
     val executorService = JavaExecutors.newWorkStealingPool(parallelism)
     new NamedExecutionContextExecutorService(
       executorService,
       name,
       errorReporter,
+      taskObserver,
     )
   }
 
@@ -27,12 +29,14 @@ object InstrumentedExecutors {
       name: String,
       nThreads: Int,
       errorReporter: Throwable => Unit = ExecutionContext.defaultReporter,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   ): NamedExecutionContextExecutorService = {
     val executorService = JavaExecutors.newFixedThreadPool(nThreads)
     new NamedExecutionContextExecutorService(
       executorService,
       name,
       errorReporter,
+      taskObserver,
     )
   }
 
@@ -41,12 +45,14 @@ object InstrumentedExecutors {
       nThreads: Int,
       threadFactory: ThreadFactory,
       errorReporter: Throwable => Unit = ExecutionContext.defaultReporter,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   ): NamedExecutionContextExecutorService = {
     val executorService = JavaExecutors.newFixedThreadPool(nThreads, threadFactory)
     new NamedExecutionContextExecutorService(
       executorService,
       name,
       errorReporter,
+      taskObserver,
     )
   }
 
@@ -54,12 +60,14 @@ object InstrumentedExecutors {
       name: String,
       threadFactory: ThreadFactory,
       errorReporter: Throwable => Unit = ExecutionContext.defaultReporter,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   ): NamedExecutionContextExecutorService = {
     val executorService = JavaExecutors.newCachedThreadPool(threadFactory)
     new NamedExecutionContextExecutorService(
       executorService,
       name,
       errorReporter,
+      taskObserver,
     )
   }
 
