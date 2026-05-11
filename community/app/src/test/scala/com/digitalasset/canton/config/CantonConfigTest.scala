@@ -215,6 +215,33 @@ class CantonConfigTest extends AnyWordSpec with BaseTest {
     }
   }
 
+  "tracing observability configuration" should {
+    "default executor and gRPC message span events to disabled" in {
+      val config = CantonConfig()
+
+      config.monitoring.tracing.observability.executorTaskSpanEvents shouldBe false
+      config.monitoring.tracing.observability.grpcMessageSpanEvents shouldBe false
+    }
+
+    "load explicit executor and gRPC message span event settings" in {
+      val rawConfig = ConfigFactory.parseString(
+        """
+          |canton.monitoring.tracing.observability {
+          |  executor-task-span-events = true
+          |  grpc-message-span-events = true
+          |}
+          |""".stripMargin
+      )
+
+      val config = CantonConfig
+        .loadRawConfig(rawConfig)
+        .valueOrFail("observability config should load")
+
+      config.monitoring.tracing.observability.executorTaskSpanEvents shouldBe true
+      config.monitoring.tracing.observability.grpcMessageSpanEvents shouldBe true
+    }
+  }
+
   "load with multiple config files" should {
     lazy val config1: Config = ConfigFactory.parseMap(
       Map(

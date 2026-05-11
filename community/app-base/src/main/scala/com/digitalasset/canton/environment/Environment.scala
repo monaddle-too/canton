@@ -7,6 +7,7 @@ import better.files.File
 import cats.data.EitherT
 import cats.syntax.either.*
 import com.daml.grpc.adapter.ExecutionSequencerFactory
+import com.daml.executors.TaskExecutionObserver
 import com.daml.metrics.ExecutorServiceMetrics
 import com.daml.metrics.api.{HistogramInventory, MetricsContext, MetricsInfoFilter}
 import com.digitalasset.canton.concurrent.*
@@ -42,7 +43,13 @@ import com.digitalasset.canton.synchronizer.sequencer.{
 import com.digitalasset.canton.telemetry.{ConfiguredOpenTelemetry, OpenTelemetryFactory}
 import com.digitalasset.canton.time.*
 import com.digitalasset.canton.tracing.TraceContext.withNewTraceContext
-import com.digitalasset.canton.tracing.{NoTracing, TraceContext, TracerProvider}
+import com.digitalasset.canton.tracing.{
+  NoTracing,
+  TraceContext,
+  TraceContextGrpc,
+  TraceContextTaskObserver,
+  TracerProvider,
+}
 import com.digitalasset.canton.util.FutureInstances.parallelFuture
 import com.digitalasset.canton.util.{MonadUtil, Mutex, PekkoUtil, SingleUseCell}
 import com.google.common.annotations.VisibleForTesting
@@ -131,6 +138,13 @@ class Environment(
   lazy val tracerProvider: TracerProvider =
     TracerProvider.Factory(configuredOpenTelemetry, "console")
 
+  private val grpcMessageSpanEventsEnabled =
+    config.monitoring.tracing.observability.grpcMessageSpanEvents
+  TraceContextGrpc.configureGrpcMessageSpanEvents(
+    grpcMessageSpanEventsEnabled,
+    Option.when(grpcMessageSpanEventsEnabled)(tracerProvider.tracer),
+  )
+
   config.monitoring.metrics.jvmMetrics
     .foreach(JvmMetrics.setup(_, configuredOpenTelemetry.openTelemetry))
 
@@ -203,6 +217,10 @@ class Environment(
 
   private val numThreads = config.parameters.threading.parallelism
     .getOrElse(Threading.detectNumberOfThreads(noTracingLogger))
+  private val taskObserver: TaskExecutionObserver =
+    if (config.monitoring.tracing.observability.executorTaskSpanEvents)
+      new TraceContextTaskObserver()
+    else TaskExecutionObserver.NoOp
   implicit lazy val executionContext: ExecutionContextIdlenessExecutorService =
     Threading.newExecutionContext(
       loggerFactory.threadName + "-env-ec",
@@ -214,6 +232,7 @@ class Environment(
       corePoolSize = config.parameters.threading.corePoolSize,
       maxPoolSize = config.parameters.threading.maxPoolSize,
       minRunnable = config.parameters.threading.minRunnable,
+      taskObserver = taskObserver,
     )
   config.parameters.threading.mutexMaxSpins.foreach { maxSpins =>
     Mutex.MaxSpins.set(maxSpins.value)

@@ -1321,6 +1321,8 @@ object CantonConfig {
       implicit val tracingConfigBatchSpanProcessorReader
           : ConfigReader[TracingConfig.BatchSpanProcessor] =
         deriveReader[TracingConfig.BatchSpanProcessor]
+      implicit val tracingConfigObservabilityReader: ConfigReader[TracingConfig.Observability] =
+        deriveReader[TracingConfig.Observability]
       implicit val tracingConfigTracerReader: ConfigReader[TracingConfig.Tracer] =
         deriveReader[TracingConfig.Tracer]
 
@@ -2121,6 +2123,8 @@ object CantonConfig {
       implicit val tracingConfigBatchSpanProcessorWriter
           : ConfigWriter[TracingConfig.BatchSpanProcessor] =
         deriveWriter[TracingConfig.BatchSpanProcessor]
+      implicit val tracingConfigObservabilityWriter: ConfigWriter[TracingConfig.Observability] =
+        deriveWriter[TracingConfig.Observability]
       implicit val tracingConfigTracerWriter: ConfigWriter[TracingConfig.Tracer] =
         deriveWriter[TracingConfig.Tracer]
 

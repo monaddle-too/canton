@@ -6,9 +6,12 @@ package com.digitalasset.canton.tracing
 import io.grpc.*
 import io.grpc.Context as GrpcContext
 import io.grpc.ForwardingClientCall.SimpleForwardingClientCall
+import io.grpc.ForwardingClientCallListener.SimpleForwardingClientCallListener
+import io.grpc.ForwardingServerCall.SimpleForwardingServerCall
 import io.grpc.ForwardingServerCallListener.SimpleForwardingServerCallListener
 import io.opentelemetry.api.trace.{Span, Tracer}
 
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong, AtomicReference}
 import scala.util.{Try, Using}
 
 /** Support for propagating TraceContext values across GRPC boundaries. Includes:
@@ -21,6 +24,16 @@ object TraceContextGrpc {
     Context.keyWithDefault[TraceContext]("traceContext", TraceContext.empty)
 
   val TraceContextOptionsKey = CallOptions.Key.create[TraceContext]("traceContext")
+
+  private val GrpcMessageSpanEventsEnabled = new AtomicBoolean(false)
+  private val GrpcMessageSpanEventsServerTracer = new AtomicReference[Option[Tracer]](None)
+
+  def configureGrpcMessageSpanEvents(enabled: Boolean, serverTracer: Option[Tracer]): Unit = {
+    GrpcMessageSpanEventsEnabled.set(enabled)
+    GrpcMessageSpanEventsServerTracer.set(serverTracer.filter(_ => enabled))
+  }
+
+  def grpcMessageSpanEventsEnabled: Boolean = GrpcMessageSpanEventsEnabled.get()
 
   def fromGrpcContext: TraceContext = TraceContextKey.get()
 
@@ -85,6 +98,11 @@ object TraceContextGrpc {
       }
 
       new SimpleForwardingClientCall[ReqT, RespT](nextCall) {
+        private val sentSequence = new AtomicLong(0)
+        private val receivedSequence = new AtomicLong(0)
+        private val callAttributes =
+          GrpcTraceInstrumentation.callAttributesFromClient(callOptions)
+        private val emitMessageEvents = grpcMessageSpanEventsEnabled
 
         override def start(
             responseListener: ClientCall.Listener[RespT],
@@ -93,7 +111,43 @@ object TraceContextGrpc {
 
           W3CTraceContext.injectIntoGrpcMetadata(traceContext, headers)
 
-          super.start(responseListener, headers)
+          if (emitMessageEvents) {
+            GrpcTraceInstrumentation.addEvent(
+              traceContext,
+              GrpcTraceInstrumentation.ClientCallStartedEventName,
+              GrpcTraceInstrumentation.attributesForCall(method, callAttributes),
+            )
+          }
+
+          val listener =
+            if (emitMessageEvents)
+              new InstrumentedClientCallListener(
+                responseListener,
+                method,
+                traceContext,
+                callAttributes,
+                receivedSequence,
+              )
+            else responseListener
+
+          super.start(listener, headers)
+        }
+
+        override def sendMessage(message: ReqT): Unit = {
+          if (emitMessageEvents) {
+            GrpcTraceInstrumentation.addEvent(
+              traceContext,
+              GrpcTraceInstrumentation.ClientMessageSentEventName,
+              GrpcTraceInstrumentation.attributesForMessage(
+                method,
+                callAttributes,
+                "sent",
+                sentSequence.incrementAndGet(),
+                message,
+              ),
+            )
+          }
+          super.sendMessage(message)
         }
       }
     }
@@ -105,11 +159,51 @@ object TraceContextGrpc {
         headers: Metadata,
         next: ServerCallHandler[ReqT, RespT],
     ): ServerCall.Listener[ReqT] = {
-      val traceContext = W3CTraceContext.fromGrpcMetadata(headers)
+      val traceContextFromWire = W3CTraceContext.fromGrpcMetadata(headers)
+      val callAttributes = GrpcTraceInstrumentation.callAttributesFromServer(call)
+      val (traceContext, endServerSpan) =
+        if (grpcMessageSpanEventsEnabled) {
+          GrpcMessageSpanEventsServerTracer.get() match {
+            case Some(tracer) =>
+              val (span, serverTraceContext) = GrpcTraceInstrumentation.startServerSpan(
+                tracer,
+                call.getMethodDescriptor,
+                traceContextFromWire,
+                callAttributes,
+              )
+              val _ = span.addEvent(
+                GrpcTraceInstrumentation.ServerCallStartedEventName,
+                GrpcTraceInstrumentation.attributesForCall(call.getMethodDescriptor, callAttributes),
+              )
+              (serverTraceContext, true)
+            case None =>
+              GrpcTraceInstrumentation.addEvent(
+                traceContextFromWire,
+                GrpcTraceInstrumentation.ServerCallStartedEventName,
+                GrpcTraceInstrumentation.attributesForCall(call.getMethodDescriptor, callAttributes),
+              )
+              (traceContextFromWire, false)
+          }
+        } else (traceContextFromWire, false)
+
       val context = GrpcContext
         .current()
         .withValue(TraceContextKey, traceContext)
-      Contexts.interceptCall(context, call, headers, next)
+
+      val serverCall =
+        if (grpcMessageSpanEventsEnabled)
+          new InstrumentedServerCall(call, traceContext, callAttributes)
+        else call
+      val listener = Contexts.interceptCall(context, serverCall, headers, next)
+      if (grpcMessageSpanEventsEnabled)
+        new InstrumentedServerCallListener(
+          listener,
+          call.getMethodDescriptor,
+          traceContext,
+          callAttributes,
+          endServerSpan,
+        )
+      else listener
     }
   }
 
@@ -127,18 +221,52 @@ object TraceContextGrpc {
         else
           traceContextFromWire
 
-      val span = tracer
-        .spanBuilder(call.getMethodDescriptor.getFullMethodName)
-        .setParent(parentTraceContext.context)
-        .startSpan()
-      val traceContext = TraceContext(span.storeInContext(parentTraceContext.context))
+      val (span, traceContext, callAttributesO) =
+        if (grpcMessageSpanEventsEnabled) {
+          val callAttributes = GrpcTraceInstrumentation.callAttributesFromServer(call)
+          val (serverSpan, serverTraceContext) =
+            GrpcTraceInstrumentation.startServerSpan(
+              tracer,
+              call.getMethodDescriptor,
+              parentTraceContext,
+              callAttributes,
+            )
+          val _ = serverSpan.addEvent(
+            GrpcTraceInstrumentation.ServerCallStartedEventName,
+            GrpcTraceInstrumentation.attributesForCall(call.getMethodDescriptor, callAttributes),
+          )
+          (serverSpan, serverTraceContext, Some(callAttributes))
+        } else {
+          val serverSpan = tracer
+            .spanBuilder(call.getMethodDescriptor.getFullMethodName)
+            .setParent(parentTraceContext.context)
+            .startSpan()
+          val serverTraceContext = TraceContext(
+            serverSpan.storeInContext(parentTraceContext.context)
+          )
+          (serverSpan, serverTraceContext, None)
+        }
 
       val context = GrpcContext
         .current()
         .withValue(TraceContextKey, traceContext)
 
-      val nextServerCallListener = Contexts.interceptCall(context, call, headers, next)
-      new ServerCallListener(nextServerCallListener, span)
+      val serverCall =
+        callAttributesO.fold(call)(callAttributes =>
+          new InstrumentedServerCall(call, traceContext, callAttributes)
+        )
+      val nextServerCallListener = Contexts.interceptCall(context, serverCall, headers, next)
+      callAttributesO match {
+        case Some(callAttributes) =>
+          new InstrumentedServerCallListener(
+            nextServerCallListener,
+            call.getMethodDescriptor,
+            traceContext,
+            callAttributes,
+            endServerSpan = true,
+          )
+        case None => new ServerCallListener(nextServerCallListener, span)
+      }
     }
 
     /** Intercepts events sent by the client.
@@ -171,5 +299,142 @@ object TraceContextGrpc {
       override def onReady(): Unit =
         delegate.onReady()
     }
+  }
+
+  private class InstrumentedClientCallListener[RespT](
+      delegate: ClientCall.Listener[RespT],
+      method: MethodDescriptor[?, RespT],
+      traceContext: TraceContext,
+      callAttributes: GrpcTraceInstrumentation.CallAttributes,
+      receivedSequence: AtomicLong,
+  ) extends SimpleForwardingClientCallListener[RespT](delegate) {
+
+    override def onMessage(message: RespT): Unit = {
+      GrpcTraceInstrumentation.addEvent(
+        traceContext,
+        GrpcTraceInstrumentation.ClientMessageReceivedEventName,
+        GrpcTraceInstrumentation.attributesForMessage(
+          method,
+          callAttributes,
+          "received",
+          receivedSequence.incrementAndGet(),
+          message,
+        ),
+      )
+      delegate.onMessage(message)
+    }
+
+    override def onClose(status: Status, trailers: Metadata): Unit = {
+      GrpcTraceInstrumentation.addEvent(
+        traceContext,
+        GrpcTraceInstrumentation.ClientCallClosedEventName,
+        GrpcTraceInstrumentation.attributesForCall(
+          method,
+          callAttributes.copy(status = Some(status)),
+        ),
+      )
+      delegate.onClose(status, trailers)
+    }
+  }
+
+  private class InstrumentedServerCall[ReqT, RespT](
+      delegate: ServerCall[ReqT, RespT],
+      traceContext: TraceContext,
+      callAttributes: GrpcTraceInstrumentation.CallAttributes,
+  ) extends SimpleForwardingServerCall[ReqT, RespT](delegate) {
+
+    private val sentSequence = new AtomicLong(0)
+    private val method = delegate.getMethodDescriptor
+
+    override def sendMessage(message: RespT): Unit = {
+      GrpcTraceInstrumentation.addEvent(
+        traceContext,
+        GrpcTraceInstrumentation.ServerMessageSentEventName,
+        GrpcTraceInstrumentation.attributesForMessage(
+          method,
+          callAttributes,
+          "sent",
+          sentSequence.incrementAndGet(),
+          message,
+        ),
+      )
+      delegate.sendMessage(message)
+    }
+
+    override def close(status: Status, trailers: Metadata): Unit = {
+      GrpcTraceInstrumentation.addEvent(
+        traceContext,
+        GrpcTraceInstrumentation.ServerCallClosedEventName,
+        GrpcTraceInstrumentation.attributesForCall(
+          method,
+          callAttributes.copy(status = Some(status)),
+        ),
+      )
+      delegate.close(status, trailers)
+    }
+  }
+
+  private class InstrumentedServerCallListener[ReqT, RespT](
+      delegate: ServerCall.Listener[ReqT],
+      method: MethodDescriptor[ReqT, RespT],
+      traceContext: TraceContext,
+      callAttributes: GrpcTraceInstrumentation.CallAttributes,
+      endServerSpan: Boolean,
+  ) extends SimpleForwardingServerCallListener[ReqT](delegate) {
+
+    private val receivedSequence = new AtomicLong(0)
+
+    override def onMessage(message: ReqT): Unit = {
+      GrpcTraceInstrumentation.addEvent(
+        traceContext,
+        GrpcTraceInstrumentation.ServerMessageReceivedEventName,
+        GrpcTraceInstrumentation.attributesForMessage(
+          method,
+          callAttributes,
+          "received",
+          receivedSequence.incrementAndGet(),
+          message,
+        ),
+      )
+      delegate.onMessage(message)
+    }
+
+    override def onHalfClose(): Unit = {
+      GrpcTraceInstrumentation.addEvent(
+        traceContext,
+        GrpcTraceInstrumentation.ServerCallHalfClosedEventName,
+        GrpcTraceInstrumentation.attributesForCall(method, callAttributes),
+      )
+      delegate.onHalfClose()
+    }
+
+    override def onCancel(): Unit = {
+      GrpcTraceInstrumentation.addEvent(
+        traceContext,
+        GrpcTraceInstrumentation.ServerCallCancelledEventName,
+        GrpcTraceInstrumentation.attributesForCall(method, callAttributes),
+      )
+      try {
+        delegate.onCancel()
+      } finally {
+        if (endServerSpan) GrpcTraceInstrumentation.endSpan(traceContext)
+      }
+    }
+
+    override def onComplete(): Unit = {
+      GrpcTraceInstrumentation.addEvent(
+        traceContext,
+        GrpcTraceInstrumentation.ServerCallCompletedEventName,
+        GrpcTraceInstrumentation.attributesForCall(method, callAttributes),
+      )
+      try {
+        delegate.onComplete()
+      } finally {
+        if (endServerSpan) GrpcTraceInstrumentation.endSpan(traceContext)
+      }
+    }
+
+    override def onReady(): Unit =
+      delegate.onReady()
   }
 }

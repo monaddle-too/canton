@@ -3,7 +3,7 @@
 
 package com.digitalasset.canton.tracing
 
-import com.digitalasset.canton.tracing.TracingConfig.{Propagation, Tracer}
+import com.digitalasset.canton.tracing.TracingConfig.{Observability, Propagation, Tracer}
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -16,6 +16,7 @@ import scala.concurrent.duration.FiniteDuration
 final case class TracingConfig(
     propagation: Propagation = Propagation.Enabled,
     tracer: Tracer = Tracer(),
+    observability: Observability = Observability(),
 )
 
 object TracingConfig {
@@ -45,6 +46,16 @@ object TracingConfig {
   final case class BatchSpanProcessor(
       batchSize: Option[Int] = None,
       scheduleDelay: Option[FiniteDuration] = None,
+  )
+
+  /** Opt-in high-fidelity trace events for local forensic runs.
+    *
+    * These settings intentionally default to disabled so normal Canton nodes keep the existing
+    * low-overhead tracing behavior unless a harness or runtime config explicitly enables them.
+    */
+  final case class Observability(
+      executorTaskSpanEvents: Boolean = false,
+      grpcMessageSpanEvents: Boolean = false,
   )
 
   /** Configuration for how to export spans */
