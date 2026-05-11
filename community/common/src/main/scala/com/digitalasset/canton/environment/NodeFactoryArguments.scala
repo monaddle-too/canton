@@ -4,6 +4,7 @@
 package com.digitalasset.canton.environment
 
 import cats.syntax.either.*
+import com.daml.executors.TaskExecutionObserver
 import com.daml.metrics.ExecutorServiceMetrics
 import com.digitalasset.canton.concurrent.FutureSupervisor
 import com.digitalasset.canton.config.CantonRequireTypes.InstanceName
@@ -35,6 +36,7 @@ final case class NodeFactoryArguments[
     writeHealthDumpToFile: HealthDumpFunction,
     configuredOpenTelemetry: ConfiguredOpenTelemetry,
     executionContext: ExecutionContext,
+    taskObserver: TaskExecutionObserver,
 ) {
   val tracerProvider: TracerProvider = TracerProvider.Factory(configuredOpenTelemetry, name)
 

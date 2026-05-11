@@ -7,6 +7,7 @@ import cats.data.{Chain, EitherT, OptionT}
 import cats.syntax.either.*
 import cats.syntax.functor.*
 import cats.{Eval, Functor, Monad}
+import com.daml.executors.TaskExecutionObserver
 import com.daml.nameof.NameOf.functionFullName
 import com.daml.nonempty.NonEmpty
 import com.digitalasset.canton.config.*
@@ -565,6 +566,7 @@ object DbStorage {
       forMigration: Boolean = false,
       retryConfig: DbStorage.RetryConfig = DbStorage.RetryConfig.failFast,
       additionalConfigDefaults: Option[Config] = None,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   )(
       loggerFactory: NamedLoggerFactory
   )(implicit closeContext: CloseContext): EitherT[UnlessShutdown, String, Database] = {
@@ -628,6 +630,7 @@ object DbStorage {
               scheduler,
               config.parameters,
               baseLogger,
+              taskObserver,
             )
             _ <- Either
               .catchOnly[SQLException](db.createSession().close())
@@ -648,6 +651,7 @@ object DbStorage {
       scheduler: Option[ScheduledExecutorService],
       parameters: DbParametersConfig,
       logger: Logger,
+      taskObserver: TaskExecutionObserver,
   )(implicit
       tracedLogger: TracedLogger,
       traceContext: TraceContext,
@@ -696,6 +700,7 @@ object DbStorage {
             tracker,
             maxConnections = maxConnections,
             registerMbeans = registerMbeans,
+            taskObserver = taskObserver,
           )
         case None =>
           AsyncExecutor(

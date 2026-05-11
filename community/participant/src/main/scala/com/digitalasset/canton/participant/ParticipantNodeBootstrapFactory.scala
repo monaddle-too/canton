@@ -144,6 +144,7 @@ object ParticipantNodeBootstrapFactoryImpl extends ParticipantNodeBootstrapFacto
       arguments.futureSupervisor,
       arguments.loggerFactory,
       Some(() => replicaManager.getSessionContext),
+      taskObserver = arguments.taskObserver,
     )
     arguments
       .toCantonNodeBootstrapCommonArguments(

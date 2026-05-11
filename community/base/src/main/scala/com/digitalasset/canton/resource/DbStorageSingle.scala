@@ -5,6 +5,7 @@ package com.digitalasset.canton.resource
 
 import cats.data.EitherT
 import cats.syntax.option.*
+import com.daml.executors.TaskExecutionObserver
 import com.digitalasset.canton.config.RequireTypes.PositiveInt
 import com.digitalasset.canton.config.{DbConfig, ProcessingTimeout, QueryCostMonitoringConfig}
 import com.digitalasset.canton.data.CantonTimestamp
@@ -160,6 +161,7 @@ object DbStorageSingle {
       timeouts: ProcessingTimeout,
       loggerFactory: NamedLoggerFactory,
       retryConfig: DbStorage.RetryConfig = DbStorage.RetryConfig.failFast,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   )(implicit
       ec: ExecutionContext,
       traceContext: TraceContext,
@@ -175,6 +177,7 @@ object DbStorageSingle {
       timeouts,
       loggerFactory,
       retryConfig,
+      taskObserver,
     )
       .valueOr(err => throw new DbStorageCreationException(err))
       .onShutdown(throw new DbStorageCreationException("Shutdown during creation"))
@@ -189,6 +192,7 @@ object DbStorageSingle {
       timeouts: ProcessingTimeout,
       loggerFactory: NamedLoggerFactory,
       retryConfig: DbStorage.RetryConfig = DbStorage.RetryConfig.failFast,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   )(implicit
       ec: ExecutionContext,
       tc: TraceContext,
@@ -240,6 +244,7 @@ object DbStorageSingle {
         scheduler,
         retryConfig = retryConfig,
         additionalConfigDefaults = readOnlyCheckConfigO,
+        taskObserver = taskObserver,
       )(loggerFactory)
       storage = new DbStorageSingle(
         profile,

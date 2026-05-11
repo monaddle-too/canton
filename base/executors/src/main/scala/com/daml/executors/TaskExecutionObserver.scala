@@ -45,6 +45,10 @@ object TaskExecutionObserver {
     case object ScheduleWithFixedDelayRunnable extends TaskKind {
       override val name: String = "schedule-with-fixed-delay-runnable"
     }
+
+    case object DatabaseRunnable extends TaskKind {
+      override val name: String = "database-runnable"
+    }
   }
 
   final case class TaskSubmitted(

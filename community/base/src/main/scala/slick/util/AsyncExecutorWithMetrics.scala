@@ -3,12 +3,15 @@
 
 package slick.util
 
+import com.daml.executors.TaskExecutionObserver
+import com.daml.executors.TaskExecutionObserver.*
 import com.digitalasset.canton.discard.Implicits.DiscardOps
 import com.typesafe.scalalogging.Logger
 import slick.util.AsyncExecutor.{PrioritizedRunnable, WithConnection}
 
 import java.lang.management.ManagementFactory
 import java.util
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.{TimeUnit, *}
 import javax.management.{InstanceNotFoundException, ObjectName}
@@ -34,6 +37,7 @@ class AsyncExecutorWithMetrics(
     maxConnections: Int = Integer.MAX_VALUE,
     keepAliveTime: FiniteDuration = 1.minute,
     registerMbeans: Boolean = false,
+    taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
 ) extends AsyncExecutorWithShutdown {
 
   @volatile private[this] lazy val mbeanName = new ObjectName(
@@ -45,6 +49,9 @@ class AsyncExecutorWithMetrics(
   override def isShuttingDown: Boolean = state.get() == 3
 
   @volatile private[this] var executor: ThreadPoolExecutor = _
+  private[this] val taskObservationEnabled = taskObserver ne TaskExecutionObserver.NoOp
+  private[this] val submittedTasks = new ConcurrentHashMap[Runnable, ObservedSubmittedTask]
+  private[this] val runningTasks = new ConcurrentHashMap[Runnable, ObservedRunningTask]
 
   if (maxConnections > maxThreads) {
     // NOTE: when using transactions or DB locks, it may happen that a task has a lock on the database but no thread
@@ -136,6 +143,7 @@ class AsyncExecutorWithMetrics(
         }
         // canton change begin
         queryCostTracker.scheduled(r)
+        taskStarted(r, t)
         // canton change end
         super.beforeExecute(t, r)
       }
@@ -143,6 +151,7 @@ class AsyncExecutorWithMetrics(
       // canton change begin
       override def execute(command: Runnable): Unit = {
         queryCostTracker.register(command)
+        taskSubmitted(command)
         try {
           super.execute(command)
         } catch {
@@ -150,6 +159,7 @@ class AsyncExecutorWithMetrics(
           // again to not leak memory
           case NonFatal(e) =>
             queryCostTracker.failed(command)
+            taskRejected(command, e)
             throw e
         }
       }
@@ -169,6 +179,7 @@ class AsyncExecutorWithMetrics(
           }
           // canton change begin
         } finally {
+          taskCompleted(r, t)
           queryCostTracker.completed(r)
           // canton change end
         }
@@ -251,6 +262,101 @@ class AsyncExecutorWithMetrics(
       logger.warn("Abandoning ThreadPoolExecutor (not yet destroyed after 30 seconds)")
   }
 
+  private[this] def taskSubmitted(command: Runnable): Unit =
+    if (taskObservationEnabled) {
+      val thread = Thread.currentThread()
+      val submitted = TaskSubmitted(
+        executorName = name,
+        taskKind = TaskKind.DatabaseRunnable,
+        submittedAtNanos = System.nanoTime(),
+        submitterThreadId = thread.getId,
+        submitterThreadName = thread.getName,
+      )
+      submittedTasks.put(
+        command,
+        new ObservedSubmittedTask(submitted, taskObserver.taskSubmitted(submitted)),
+      )
+      ()
+    }
+
+  private[this] def taskStarted(command: Runnable, thread: Thread): Unit =
+    if (taskObservationEnabled) {
+      Option(submittedTasks.remove(command)).foreach { observed =>
+        val startedAtNanos = System.nanoTime()
+        val started = TaskStarted(
+          submitted = observed.submitted,
+          startedAtNanos = startedAtNanos,
+          queueTimeNanos = nonNegativeNanos(startedAtNanos - observed.submitted.submittedAtNanos),
+          workerThreadId = thread.getId,
+          workerThreadName = thread.getName,
+        )
+        runningTasks.put(
+          command,
+          new ObservedRunningTask(
+            started,
+            observed.handle.taskStarted(started),
+            currentThreadCpuTimeNanos,
+          ),
+        )
+        ()
+      }
+    }
+
+  private[this] def taskCompleted(command: Runnable, failure: Throwable): Unit =
+    if (taskObservationEnabled) {
+      Option(runningTasks.remove(command)).foreach { observed =>
+        val completedAtNanos = System.nanoTime()
+        observed.running.taskCompleted(
+          TaskCompleted(
+            started = observed.started,
+            completedAtNanos = completedAtNanos,
+            runTimeNanos = nonNegativeNanos(completedAtNanos - observed.started.startedAtNanos),
+            cpuTimeNanos = cpuTimeElapsedNanos(observed.startedCpuTimeNanos),
+            failure = Option(failure),
+          )
+        )
+      }
+    }
+
+  private[this] def taskRejected(command: Runnable, failure: Throwable): Unit =
+    if (taskObservationEnabled) {
+      Option(submittedTasks.remove(command)).foreach { observed =>
+        observed.handle.taskRejected(
+          TaskRejected(
+            submitted = observed.submitted,
+            rejectedAtNanos = System.nanoTime(),
+            failure = failure,
+          )
+        )
+      }
+    }
+
+  private[this] def currentThreadCpuTimeNanos: Option[Long] =
+    Option
+      .when(AsyncExecutorWithMetricsCpuTime.threadCpuTimeAvailable) {
+        AsyncExecutorWithMetricsCpuTime.threadMxBean.getCurrentThreadCpuTime
+      }
+      .filter(_ >= 0L)
+
+  private[this] def cpuTimeElapsedNanos(start: Option[Long]): Option[Long] =
+    for {
+      startNanos <- start
+      completedNanos <- currentThreadCpuTimeNanos
+    } yield nonNegativeNanos(completedNanos - startNanos)
+
+  private[this] def nonNegativeNanos(value: Long): Long = Math.max(0L, value)
+
+  private final class ObservedSubmittedTask(
+      val submitted: TaskSubmitted,
+      val handle: TaskHandle,
+  )
+
+  private final class ObservedRunningTask(
+      val started: TaskStarted,
+      val running: RunningTask,
+      val startedCpuTimeNanos: Option[Long],
+  )
+
   private class DaemonThreadFactory(namePrefix: String) extends ThreadFactory {
     private[this] val group = Thread.currentThread.getThreadGroup
     private[this] val threadNumber = new AtomicInteger(1)
@@ -265,10 +371,17 @@ class AsyncExecutorWithMetrics(
 
 }
 
+private object AsyncExecutorWithMetricsCpuTime {
+  val threadMxBean = ManagementFactory.getThreadMXBean
+  val threadCpuTimeAvailable: Boolean =
+    threadMxBean.isCurrentThreadCpuTimeSupported && threadMxBean.isThreadCpuTimeEnabled
+}
+
 object AsyncExecutorWithMetrics {
   def createSingleThreaded(
       name: String,
       logger: Logger,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   ): AsyncExecutorWithMetrics & AsyncExecutorWithShutdown =
     new AsyncExecutorWithMetrics(
       name = s"${name}DatabaseExecutor",
@@ -278,5 +391,6 @@ object AsyncExecutorWithMetrics {
       logger = logger,
       queryCostTracker = QueryCostTracker.NoOp,
       maxConnections = 1,
+      taskObserver = taskObserver,
     )
 }

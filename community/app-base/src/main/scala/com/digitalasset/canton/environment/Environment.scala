@@ -543,6 +543,7 @@ class Environment(
           writeHealthDumpToFile,
           configuredOpenTelemetry,
           executionContext,
+          taskObserver,
         )
       )
       .valueOr(err =>
@@ -567,6 +568,7 @@ class Environment(
         writeHealthDumpToFile,
         configuredOpenTelemetry,
         executionContext,
+        taskObserver,
       )
     )
     .valueOr(err =>
@@ -593,6 +595,7 @@ class Environment(
           writeHealthDumpToFile,
           configuredOpenTelemetry,
           executionContext,
+          taskObserver,
         ),
         testingTimeService,
       )

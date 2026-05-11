@@ -7,6 +7,7 @@ import com.daml.executors.TaskExecutionObserver
 import com.daml.executors.TaskExecutionObserver.*
 import com.daml.executors.executors.NamedExecutionContextExecutorService
 import com.digitalasset.canton.BaseTestWordSpec
+import slick.util.AsyncExecutorWithMetrics
 
 import java.util.concurrent.*
 
@@ -82,6 +83,35 @@ class TaskExecutionObserverTest extends BaseTestWordSpec {
         completed.failure shouldBe None
       } finally {
         val _ = executor.shutdownNow()
+      }
+    }
+  }
+
+  "AsyncExecutorWithMetrics task observation" should {
+    "record database executor queue, run, and worker-thread data" in {
+      val observer = new RecordingTaskObserver
+      val executor = AsyncExecutorWithMetrics.createSingleThreaded(
+        "observed-db",
+        noTracingLogger,
+        observer,
+      )
+      val ran = new CountDownLatch(1)
+
+      try {
+        executor.executionContext.execute(() => ran.countDown())
+
+        ran.await(5, TimeUnit.SECONDS) shouldBe true
+        val completed = observer.nextCompleted()
+
+        completed.started.submitted.executorName shouldBe "observed-dbDatabaseExecutor"
+        completed.started.submitted.taskKind shouldBe TaskKind.DatabaseRunnable
+        completed.started.queueTimeNanos should be >= 0L
+        completed.runTimeNanos should be >= 0L
+        completed.started.workerThreadName should startWith("observed-dbDatabaseExecutor-")
+        completed.started.workerThreadId should not be Thread.currentThread().getId
+        completed.failure shouldBe None
+      } finally {
+        executor.close()
       }
     }
   }

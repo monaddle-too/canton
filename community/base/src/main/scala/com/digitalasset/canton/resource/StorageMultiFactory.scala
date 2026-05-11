@@ -5,6 +5,7 @@ package com.digitalasset.canton.resource
 
 import cats.data.EitherT
 import cats.syntax.functor.*
+import com.daml.executors.TaskExecutionObserver
 import com.digitalasset.canton.concurrent.FutureSupervisor
 import com.digitalasset.canton.config.*
 import com.digitalasset.canton.lifecycle.{
@@ -33,6 +34,7 @@ class StorageMultiFactory(
     futureSupervisor: FutureSupervisor,
     override protected val loggerFactory: NamedLoggerFactory,
     getSessionContextO: Option[() => CloseContext],
+    taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
 ) extends StorageFactory
     with NamedLogging {
 
@@ -92,6 +94,7 @@ class StorageMultiFactory(
                 futureSupervisor,
                 loggerFactory,
                 getSessionContext,
+                taskObserver = taskObserver,
               )
               .widen[Storage]
           case _ =>
@@ -106,6 +109,7 @@ class StorageMultiFactory(
                 metrics,
                 timeouts,
                 loggerFactory,
+                taskObserver = taskObserver,
               )
               .widen[Storage]
         }

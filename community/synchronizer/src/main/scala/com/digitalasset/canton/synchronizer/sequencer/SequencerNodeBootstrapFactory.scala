@@ -72,6 +72,7 @@ object SequencerNodeBootstrapFactoryImpl extends SequencerNodeBootstrapFactory {
       arguments.futureSupervisor,
       arguments.loggerFactory,
       None,
+      taskObserver = arguments.taskObserver,
     )
 
     toNodeCommonArguments(arguments, storageFactory)

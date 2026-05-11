@@ -5,6 +5,7 @@ package com.digitalasset.canton.resource
 
 import cats.data.EitherT
 import cats.syntax.functor.*
+import com.daml.executors.TaskExecutionObserver
 import com.digitalasset.canton.config.*
 import com.digitalasset.canton.lifecycle.{CloseContext, UnlessShutdown}
 import com.digitalasset.canton.logging.NamedLoggerFactory
@@ -19,7 +20,8 @@ import scala.concurrent.ExecutionContext
   * nodes, use [[StorageMultiFactory]] instead.
   */
 class StorageSingleFactory(
-    val config: StorageConfig
+    val config: StorageConfig,
+    taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
 ) extends StorageFactory {
 
   def create(
@@ -49,6 +51,7 @@ class StorageSingleFactory(
             metrics,
             timeouts,
             loggerFactory,
+            taskObserver = taskObserver,
           )
           .widen[Storage]
     }

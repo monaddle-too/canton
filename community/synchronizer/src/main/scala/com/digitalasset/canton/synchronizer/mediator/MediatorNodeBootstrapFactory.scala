@@ -55,6 +55,7 @@ object MediatorNodeBootstrapFactoryImpl extends MediatorNodeBootstrapFactory {
           arguments.futureSupervisor,
           arguments.loggerFactory,
           Some(() => replicaManager.getSessionContext),
+          taskObserver = arguments.taskObserver,
         ),
         Some(replicaManager),
       )

@@ -5,6 +5,7 @@ package com.digitalasset.canton.resource
 
 import cats.data.EitherT
 import cats.syntax.either.*
+import com.daml.executors.TaskExecutionObserver
 import com.daml.nameof.NameOf.functionFullName
 import com.digitalasset.canton.concurrent.FutureSupervisor
 import com.digitalasset.canton.config.RequireTypes.PositiveInt
@@ -236,6 +237,7 @@ object DbStorageMulti {
       futureSupervisor: FutureSupervisor,
       loggerFactory: NamedLoggerFactory,
       getSessionContext: () => CloseContext,
+      taskObserver: TaskExecutionObserver = TaskExecutionObserver.NoOp,
   )(implicit
       ec: ExecutionContext,
       tc: TraceContext,
@@ -257,6 +259,7 @@ object DbStorageMulti {
           Some(metrics.general),
           logQueryCost,
           scheduler,
+          taskObserver = taskObserver,
         )(loggerFactory)
 
       profile <- DbLock.isSupported(DbStorage.profile(dbConfig)).toEitherT[UnlessShutdown]
@@ -281,6 +284,7 @@ object DbStorageMulti {
           logger,
           tracker,
           maxConnections = writePoolSize.value,
+          taskObserver = taskObserver,
         )
       }
 
