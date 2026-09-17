@@ -25,8 +25,8 @@ Refer to the [Canton Whitepaper](https://www.canton.io/publications/canton-white
 
 ## Documentation
 
-Please refer to the [Documentation](https://docs.digitalasset.com/) for
-for instructions on how to operate a participant node or a synchronizer.
+Please refer to the [Documentation](https://docs.digitalasset.com/) for for for
+instructions on how to operate a participant node or a synchronizer.
 
 ## Development
 
