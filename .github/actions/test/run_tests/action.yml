@@ -415,7 +415,8 @@ runs:
         succeed_on_error: ${{ inputs.succeed_on_error }}
         timeout: ${{ inputs.timeout }}
         report_to_datadog: ${{ inputs.report_to_datadog }}
-        extra_parameters: -J-Xlog:gc=info,safepoint=info:file=track/GC.log:time
+        # TEST_ENVIRONMENT_CONCURRENCY_PARAMETERS is set by _test.yml (empty for other lanes).
+        extra_parameters: -J-Xlog:gc=info,safepoint=info:file=track/GC.log:time ${{ env.TEST_ENVIRONMENT_CONCURRENCY_PARAMETERS }}
 
     - name: Snapshot first-run JUnit reports
       if: always()
