@@ -44,6 +44,16 @@ def parse_junit_file(path, timings):
         duration = max(duration, 0.0)
         timings[key] = timings.get(key, 0.0) + duration
 
+    # A suite whose report has no test cases (all its tests excluded by tag in this lane, or a
+    # class with no tests at all) still runs in the shard but costs nothing. Without an entry it
+    # is weighted at split_tests.py's fallback (300 s in the lanes) on every run; record it as 0.
+    # setdefault keeps the sum when another report for the class has test cases.
+    suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+    for suite in suites:
+        name = (suite.attrib.get("name") or "").strip()
+        if name and suite.find("testcase") is None:
+            timings.setdefault(name, 0.0)
+
 
 def collect_junit_paths(junit_glob):
     return sorted(glob.glob(junit_glob, recursive=True))
@@ -120,6 +130,23 @@ def test_parse_junit_file_ignores_invalid_xml():
         os.remove(path)
 
 
+def test_parse_junit_file_records_suites_without_test_cases_as_zero():
+    reports = {
+        "empty.xml": '<testsuite name="suite.Kms" tests="0" time="0.0"></testsuite>',
+        "wrapped.xml": '<testsuites><testsuite name="suite.Base" tests="0"/></testsuites>',
+        "with-tests.xml": '<testsuite name="suite.A" tests="1"><testcase classname="suite.A" name="a" time="2.0"/></testsuite>',
+        "a-empty.xml": '<testsuite name="suite.A" tests="0"></testsuite>',
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        timings = {}
+        for filename in ("with-tests.xml", "a-empty.xml", "empty.xml", "wrapped.xml"):
+            path = os.path.join(tmp, filename)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(reports[filename])
+            parse_junit_file(path, timings)
+        assert timings == {"suite.A": 2.0, "suite.Kms": 0.0, "suite.Base": 0.0}
+
+
 def test_build_timings_skips_missing_paths():
     timings = build_timings(["/tmp/does-not-exist-report.xml"])
     assert timings == {}
@@ -140,6 +167,7 @@ def self_test():
     test_parse_junit_file_aggregates_durations()
     test_parse_junit_file_drops_negative_durations()
     test_parse_junit_file_ignores_invalid_xml()
+    test_parse_junit_file_records_suites_without_test_cases_as_zero()
     test_build_timings_skips_missing_paths()
     test_write_timings_and_ensure_output_dir()
     print("All self-checks passed")
