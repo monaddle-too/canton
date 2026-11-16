@@ -23,6 +23,12 @@ inputs:
   test_job_success:
     required: true
     description: Whether the test job succeeded, used for reporting stability to Datadog
+  zero_weight_suites_without_tests:
+    default: "false"
+    required: false
+    description: >-
+      Record test classes whose JUnit report has no test cases with weight 0 in timings.json,
+      instead of leaving them to the splitter's fallback weight. Only crash recovery sets this.
   job_name:
     default: ""
     required: false
@@ -59,7 +65,8 @@ runs:
         command: |
           python3 scripts/ci/split-tests/build_timings.py \
             --junit-glob ".ci-test-results/merged/TEST-*.xml" \
-            --output timings.json
+            --output timings.json \
+            ${{ inputs.zero_weight_suites_without_tests == 'true' && '--zero-weight-suites-without-tests' || '' }}
 
     - name: Build Test Results Summary (Shard Artifact)
       if: ${{ !cancelled() }}
