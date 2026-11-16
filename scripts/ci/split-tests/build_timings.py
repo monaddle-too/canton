@@ -12,6 +12,12 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--junit-glob", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--zero-weight-suites-without-tests",
+        action="store_true",
+        help="Record suites whose report has no test cases with weight 0 instead of leaving them out "
+        "(they are then weighted at split_tests.py's fallback).",
+    )
     return parser.parse_args(argv)
 
 
@@ -21,7 +27,7 @@ def testcase_key(tc):
     return classname
 
 
-def parse_junit_file(path, timings):
+def parse_junit_file(path, timings, zero_weight_suites_without_tests=False):
     try:
         root = ET.parse(path).getroot()
     except (
@@ -44,6 +50,8 @@ def parse_junit_file(path, timings):
         duration = max(duration, 0.0)
         timings[key] = timings.get(key, 0.0) + duration
 
+    if not zero_weight_suites_without_tests:
+        return
     # A suite whose report has no test cases (all its tests excluded by tag in this lane, or a
     # class with no tests at all) still runs in the shard but costs nothing. Without an entry it
     # is weighted at split_tests.py's fallback (300 s in the lanes) on every run; record it as 0.
@@ -59,11 +67,11 @@ def collect_junit_paths(junit_glob):
     return sorted(glob.glob(junit_glob, recursive=True))
 
 
-def build_timings(paths):
+def build_timings(paths, zero_weight_suites_without_tests=False):
     timings = {}
     for path in paths:
         if os.path.isfile(path):
-            parse_junit_file(path, timings)
+            parse_junit_file(path, timings, zero_weight_suites_without_tests)
     return timings
 
 
@@ -138,13 +146,19 @@ def test_parse_junit_file_records_suites_without_test_cases_as_zero():
         "a-empty.xml": '<testsuite name="suite.A" tests="0"></testsuite>',
     }
     with tempfile.TemporaryDirectory() as tmp:
-        timings = {}
+        paths = []
         for filename in ("with-tests.xml", "a-empty.xml", "empty.xml", "wrapped.xml"):
             path = os.path.join(tmp, filename)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(reports[filename])
-            parse_junit_file(path, timings)
-        assert timings == {"suite.A": 2.0, "suite.Kms": 0.0, "suite.Base": 0.0}
+            paths.append(path)
+        # Off by default: suites without test cases are left out, as before.
+        assert build_timings(paths) == {"suite.A": 2.0}
+        assert build_timings(paths, zero_weight_suites_without_tests=True) == {
+            "suite.A": 2.0,
+            "suite.Kms": 0.0,
+            "suite.Base": 0.0,
+        }
 
 
 def test_build_timings_skips_missing_paths():
@@ -176,7 +190,7 @@ def self_test():
 def main():
     args = parse_args()
     paths = collect_junit_paths(args.junit_glob)
-    timings = build_timings(paths)
+    timings = build_timings(paths, args.zero_weight_suites_without_tests)
     ensure_output_dir(args.output)
     write_timings(args.output, timings)
 

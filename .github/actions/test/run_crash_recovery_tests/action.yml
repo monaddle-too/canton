@@ -131,3 +131,7 @@ runs:
         report_to_datadog: "true"
         job_name: ${{ inputs.job_name }}
         test_job_success: ${{ steps.run_sbt_tests.outcome == 'success' }}
+        # The lane runs one suite at a time, so a shard's time is the sum of its suites' weights.
+        # Classes without test cases (e.g. the RequiresExternalKms failover variants, excluded here)
+        # would otherwise each be weighted at the 300 s fallback.
+        zero_weight_suites_without_tests: 'true'
