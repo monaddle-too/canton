@@ -495,6 +495,92 @@ object DamlPlugin extends AutoPlugin {
     cachedOutput(cacheInput)
   }
 
+  private type DamlBuildCacheInput = (Set[HashFileInfo], String, Boolean, String, Boolean, Set[File])
+
+  /** [TEST ONLY] Explains a damlBuild cache miss before sbt's own check.
+    *
+    * In CI test shards damlBuild rebuilt (and so installed daml, ~22 s) in most shards although
+    * every shard restored the compile job's target directories for the same commit. sbt's
+    * `basicCache` stores `[murmur hash of the input's JSON, output]` and rebuilds when the hash
+    * differs, so the JSON's element order counts too (a `Set` of up to four files keeps insertion
+    * order, which comes from the directory listing).
+    *
+    * Every evaluation writes the input's JSON next to the store (`<store>-input.json`, restored
+    * with the target directories). On a hash mismatch this logs, under `[daml-cache]`, both hashes
+    * and whether the previous input had the same content in a different order or which parts
+    * differ. A missing, empty or unreadable store is logged too. Nothing is logged on a hit.
+    */
+  private def diagnoseDamlBuildCache(
+      log: Logger,
+      label: String,
+      storeFile: File,
+      store: sbt.util.CacheStore,
+      current: DamlBuildCacheInput,
+      inputFormat: sjsonnew.JsonFormat[DamlBuildCacheInput],
+  ): Unit = {
+    import sbt.util.CacheImplicits._
+    import sjsonnew.support.murmurhash.Hasher
+    import sjsonnew.support.scalajson.unsafe.{CompactPrinter, Converter, Parser}
+    def fileJson(h: HashFileInfo): String = CompactPrinter(Converter.toJsonUnsafe(h)(HashFileInfo.format))
+    val inputJsonFile = new File(storeFile.getPath + "-input.json")
+    val currentJson = CompactPrinter(Converter.toJsonUnsafe(current)(inputFormat))
+    // Same hash as sbt's BasicCache: Hasher.hashUnsafe over the input's JsonFormat.
+    implicit val inputJsonFormat: sjsonnew.JsonFormat[DamlBuildCacheInput] = inputFormat
+    val currentHash = Hasher.hashUnsafe[DamlBuildCacheInput](current).toLong
+    val storedFormat =
+      tuple2Format(LongJsonFormat, FileStamp.Formats.seqFileJsonFormatter)
+    val previousJson = scala.util.Try(IO.read(inputJsonFile)).toOption
+    def describe(previous: DamlBuildCacheInput): Seq[String] = {
+      val onlyPrevious = (previous._1 -- current._1).toSeq.map(fileJson).sorted
+      val onlyNow = (current._1 -- previous._1).toSeq.map(fileJson).sorted
+      (if (previous._1 == current._1) Nil
+       else
+         Seq(
+           s"source files: ${previous._1.size} before, ${current._1.size} now; " +
+             s"${onlyPrevious.size} only before, ${onlyNow.size} only now"
+         ) ++ onlyPrevious.take(8).map("  only before: " + _) ++ onlyNow.take(8).map("  only now:    " + _)) ++
+        Seq(
+          if (previous._2 != current._2) Some(s"outputDirectory: ${previous._2} -> ${current._2}") else None,
+          if (previous._3 != current._3) Some(s"useVersionedDarFileName: ${previous._3} -> ${current._3}") else None,
+          if (previous._4 != current._4) Some(s"daml version: ${previous._4} -> ${current._4}") else None,
+          if (previous._5 != current._5) Some(s"extractMainDalf: ${previous._5} -> ${current._5}") else None,
+          if (previous._6 != current._6) Some(s"pinned projects: ${previous._6} -> ${current._6}") else None,
+        ).flatten
+    }
+    if (!storeFile.exists() || storeFile.length() == 0L)
+      log.info(s"[daml-cache] $label: ${if (storeFile.exists()) "empty" else "no"} stored result; building")
+    else
+      scala.util.Try(store.read[(Long, Seq[File])]()(storedFormat)) match {
+        case scala.util.Failure(e) =>
+          log.info(
+            s"[daml-cache] $label: stored result (${storeFile.length()} bytes) cannot be read: " +
+              s"${e.getClass.getName}: ${e.getMessage}; building"
+          )
+        case scala.util.Success((storedHash, _)) if storedHash != currentHash =>
+          log.info(s"[daml-cache] $label: input hash $currentHash differs from stored $storedHash; building")
+          val lines = previousJson match {
+            case None => Seq(s"no previous input recorded at $inputJsonFile")
+            case Some(json) if json.trim == currentJson =>
+              Seq("previous input JSON is identical, so the stored hash came from another input")
+            case Some(json) =>
+              scala.util.Try(Converter.fromJsonUnsafe[DamlBuildCacheInput](Parser.parseUnsafe(json))(inputFormat)) match {
+                case scala.util.Failure(e) => Seq(s"previous input JSON cannot be read: ${e.getMessage}")
+                case scala.util.Success(previous) if previous == current =>
+                  Seq(
+                    "same files, hashes and settings as the previous input, in a different order " +
+                      "(JSON element order is part of the hash)",
+                    "  before: " + json.trim.take(600),
+                    "  now:    " + currentJson.take(600),
+                  )
+                case scala.util.Success(previous) => describe(previous)
+              }
+          }
+          lines.foreach(l => log.info(s"[daml-cache]   $l"))
+        case scala.util.Success(_) => ()
+      }
+    IO.write(inputJsonFile, currentJson + "\n")
+  }
+
   /** Returns a file relative to the given directory. */
   private def relativeFile(dir: File, path: Path): File =
     dir.toPath.relativize(path).normalize().toFile
@@ -554,21 +640,28 @@ object DamlPlugin extends AutoPlugin {
       relativePinnedProjectFiles,
     )
     // implicit resolution fails
-    val cacheFormat = basicCache(
-      tuple6Format(
-        immSetFormat[HashFileInfo], // source files and dependencies
-        StringJsonFormat, // outputDirectory
-        BooleanJsonFormat, // useVersionedDarFileName
-        StringJsonFormat, // daml compiler version
-        BooleanJsonFormat, // shouldExtractMainDalf
-        immSetFormat[File], // list of pinned projects
-      ),
-      FileStamp.Formats.seqFileJsonFormatter,
+    val inputFormat = tuple6Format(
+      immSetFormat[HashFileInfo], // source files and dependencies
+      StringJsonFormat, // outputDirectory
+      BooleanJsonFormat, // useVersionedDarFileName
+      StringJsonFormat, // daml compiler version
+      BooleanJsonFormat, // shouldExtractMainDalf
+      immSetFormat[File], // list of pinned projects
     )
+    val cacheFormat = basicCache(inputFormat, FileStamp.Formats.seqFileJsonFormatter)
+    val diagnosticLabel = s"${thisProject.value.id} / ${configuration.value.name} / damlBuild"
 
     // start a new task for each LF version, for parallelization
     def cachedTask(lfVersion: String) = Def.task {
       val cacheStore = streams.cacheStoreFactory.make(s"damlBuild-$lfVersion")
+      diagnoseDamlBuildCache(
+        streams.log,
+        s"$diagnosticLabel-$lfVersion",
+        streams.cacheDirectory / s"damlBuild-$lfVersion",
+        cacheStore,
+        cacheInput,
+        inputFormat,
+      )
       val cachedOutputDars =
         Cache.cached(cacheStore) {
           (_: (Set[HashFileInfo], String, Boolean, String, Boolean, Set[File])) =>
