@@ -129,4 +129,8 @@ sbt-license-report: unable to find the value for property joda\.artifactId
 # Transient protoc failure due to race condition on the protocbridge script
 ^\[info\] Full protoc args:.*
 
+# [TEST ONLY] Daml build cache-miss diagnostics (project/DamlPlugin.scala); file paths may contain
+# words such as "error".
+^\[info\] \[daml-cache\]
+
 # Make sure to have a trailing newline
