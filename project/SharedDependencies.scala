@@ -147,7 +147,10 @@ object SharedDependencies {
     )
     // A lazy val that fails to initialize must break the build, not silently drop a pin that
     // the SDK repo reads out of the generated json.
-    accessors.map(_.invoke(this).asInstanceOf[ModuleID])
+    // getDeclaredMethods returns methods in no particular order, and the order changes between JVMs.
+    // Sort them: the list becomes dependencyOverrides, whose order is part of every project's
+    // update cache key, so an unstable order made each new sbt JVM re-resolve every project.
+    accessors.sortBy(_.getName).map(_.invoke(this).asInstanceOf[ModuleID])
   }
 
   // One field of the generated json: the artifact and the version pinned for it.
